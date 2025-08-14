@@ -1,0 +1,46 @@
+services:
+  postgres:
+    image: postgres:15
+    container_name: postgres-db1
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: "1234"
+      POSTGRES_DB: testdb3 # The database that will be created
+    ports:
+      - "5430:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    # This healthcheck tells Docker to check if the database is ready
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d testdb3"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  migrate:
+    build: .
+    container_name: migrate-cli1
+    depends_on:
+      postgres:
+        # This condition waits for the postgres service to pass its healthcheck
+        condition: service_healthy 
+    volumes:
+      - ./migrations:/app/migrations
+    command:
+      [
+        "-action", "status",
+        "-path", "migrations",
+        # CORRECTED: The command now points to the correct database (testdb3)
+        "-db", "postgres://postgres:1234@postgres:5432/testdb3?sslmode=disable"
+      ]
+  migrate-test:
+    build:
+      context: .
+      # It specifically targets the 'builder' stage from the Dockerfile.
+      target: builder 
+    command: ["go", "test", "-v", "./..."]
+    depends_on:
+      - postgres   
+
+volumes:
+  postgres_data:
