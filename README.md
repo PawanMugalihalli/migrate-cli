@@ -19,8 +19,7 @@ A powerful, dependency-aware command-line tool for managing database schema migr
 Ensure you have the Go toolchain installed (version 1.23 or newer is recommended).
 
 Run the following command in your terminal to install the tool:
-```sh
-go install [github.com/PawanMugalihalli/migrate-cli@latest](https://github.com/PawanMugalihalli/migrate-cli@latest)
+go install github.com/PawanMugalihalli/migrate-cli@latest
 
 ---
 Usage and Use Cases
