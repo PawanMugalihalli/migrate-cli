@@ -6,10 +6,11 @@ import (
 	"migrate/gomigration"
 	"path/filepath"
 	"sort"
+	"sync"
 	"time"
 )
 
-// Interfaces define the contracts for migration sources and database drivers.
+// Interfaces remain the same.
 type Source interface {
 	ReadUp(version int) (string, error)
 	ReadDown(version int) (string, error)
@@ -24,26 +25,191 @@ type Database interface {
 	DB() *sql.DB
 }
 
-// MigrationMetadata now explicitly holds the up and down filenames.
+// MigrationMetadata remains the same.
 type MigrationMetadata struct {
 	Version      int
 	Name         string
-	UpFile       string // e.g., "000001_create_users.up.sql"
-	DownFile     string // e.g., "000001_create_users.down.sql"
+	UpFile       string
+	DownFile     string
 	Dependencies []int
 }
 
-// Migrator orchestrates the migration process.
+// Migrator struct with caches remains the same.
 type Migrator struct {
 	src Source
 	db  Database
+
+	allMigrations          []MigrationMetadata
+	allMigrationsErr       error
+	fetchAllMigrationsOnce sync.Once
+
+	appliedUpMigrations    map[string]bool
+	appliedUpMigrationsErr error
+	fetchAppliedUpOnce     sync.Once
 }
 
 func New(src Source, db Database) *Migrator {
 	return &Migrator{src: src, db: db}
 }
 
-// Up applies all pending migrations in the correct topological order.
+// --- Caching Helper Methods (Unchanged) ---
+func (m *Migrator) getAllMigrations() ([]MigrationMetadata, error) {
+	m.fetchAllMigrationsOnce.Do(func() {
+		m.allMigrations, m.allMigrationsErr = m.src.ListMigrations()
+	})
+	return m.allMigrations, m.allMigrationsErr
+}
+
+func (m *Migrator) getAppliedUpMigrations() (map[string]bool, error) {
+	m.fetchAppliedUpOnce.Do(func() {
+		m.appliedUpMigrations, m.appliedUpMigrationsErr = m.db.GetApplied("up")
+	})
+	return m.appliedUpMigrations, m.appliedUpMigrationsErr
+}
+
+// --- Main Methods ---
+
+// Goto is now fully implemented to handle both up and down migrations.
+func (m *Migrator) Goto(targetVersion int) error {
+	currentVersion, _, err := m.db.Version()
+	if err != nil {
+		return fmt.Errorf("failed to get current database version: %w", err)
+	}
+
+	if targetVersion == currentVersion {
+		fmt.Printf("Database is already at version %d.\n", targetVersion)
+		return nil
+	}
+
+	if targetVersion > currentVersion {
+		return m.migrateUpTo(targetVersion)
+	}
+
+	return m.migrateDownTo(targetVersion)
+}
+
+// migrateUpTo contains the logic for migrating UP to a target.
+func (m *Migrator) migrateUpTo(targetVersion int) error {
+	allMigs, err := m.getAllMigrations()
+	if err != nil {
+		return err
+	}
+
+	targetDepGraph, err := m.buildDependencyGraph(allMigs, targetVersion)
+	if err != nil {
+		return err
+	}
+
+	sorted, err := TopoSort(targetDepGraph)
+	if err != nil {
+		return err
+	}
+
+	applied, err := m.getAppliedUpMigrations()
+	if err != nil {
+		return err
+	}
+
+	pending := make([]MigrationMetadata, 0)
+	for _, mig := range sorted {
+		if !applied[mig.UpFile] {
+			pending = append(pending, mig)
+		}
+	}
+
+	if len(pending) == 0 {
+		fmt.Printf("All migrations up to version %d are already applied.\n", targetVersion)
+		return nil
+	}
+
+	fmt.Printf("Applying %d migrations to reach version %d...\n", len(pending), targetVersion)
+	return m.applyMigrations(pending, "up")
+}
+
+// migrateDownTo contains the logic for migrating DOWN to a target (rolling back).
+func (m *Migrator) migrateDownTo(targetVersion int) error {
+	allMigs, err := m.getAllMigrations()
+	if err != nil {
+		return err
+	}
+
+	// 1. Get the dependency graph for the target state.
+	targetDepGraph, err := m.buildDependencyGraph(allMigs, targetVersion)
+	if err != nil {
+		return err
+	}
+	targetDepMap := make(map[int]bool)
+	for _, mig := range targetDepGraph {
+		targetDepMap[mig.Version] = true
+	}
+
+	// 2. Get the full list of currently applied migrations.
+	applied, err := m.getAppliedUpMigrations()
+	if err != nil {
+		return err
+	}
+	appliedMigs := make([]MigrationMetadata, 0)
+	for _, mig := range allMigs {
+		if applied[mig.UpFile] {
+			appliedMigs = append(appliedMigs, mig)
+		}
+	}
+
+	// 3. Topologically sort the *currently applied* migrations to get the exact application order.
+	appliedOrder, err := TopoSort(appliedMigs)
+	if err != nil {
+		return fmt.Errorf("could not sort applied migrations: %w", err)
+	}
+
+	// 4. Find which migrations to roll back by filtering the correctly sorted list.
+	toRollback := make([]MigrationMetadata, 0)
+	for _, mig := range appliedOrder {
+		if !targetDepMap[mig.Version] {
+			toRollback = append(toRollback, mig)
+		}
+	}
+
+	if len(toRollback) == 0 {
+		fmt.Println("No migrations to roll back.")
+		return nil
+	}
+
+	// 5. IMPORTANT: Reverse the list to get the correct rollback order.
+	// The last one applied must be the first one rolled back.
+	for i, j := 0, len(toRollback)-1; i < j; i, j = i+1, j-1 {
+		toRollback[i], toRollback[j] = toRollback[j], toRollback[i]
+	}
+
+	fmt.Printf("Rolling back %d migrations to reach version %d...\n", len(toRollback), targetVersion)
+	// Note: We use a custom rollback loop instead of applyMigrations
+	// because the state management is slightly different.
+	for _, mig := range toRollback {
+		fmt.Printf("Rolling back: %s\n", mig.DownFile)
+
+		// Standard dirty flag management for the 'down' migration
+		if err := m.db.SetMigrationState(mig.DownFile, true, "down"); err != nil {
+			return err
+		}
+		if err := m.runMigration(mig, "down"); err != nil {
+			return fmt.Errorf("failed to run down migration for %s: %w", mig.DownFile, err)
+		}
+		if err := m.db.SetMigrationState(mig.DownFile, false, "down"); err != nil {
+			return err
+		}
+
+		// Clean up the original 'up' migration record
+		_, err := m.db.DB().Exec(`DELETE FROM schema_migrations WHERE version_name=$1 AND direction='up'`, mig.UpFile)
+		if err != nil {
+			return fmt.Errorf("failed to delete 'up' record for %s: %w", mig.UpFile, err)
+		}
+	}
+
+	fmt.Println("Rollback completed successfully.")
+	return nil
+}
+
+// --- Other methods (Unchanged) ---
+
 func (m *Migrator) Up() error {
 	migrations, err := m.getPendingMigrations()
 	if err != nil {
@@ -57,8 +223,6 @@ func (m *Migrator) Up() error {
 	return m.applyMigrations(migrations, "up")
 }
 
-// Down rolls back the single most recent 'up' migration.
-// FIXED: This function is now updated to work with the new metadata struct.
 func (m *Migrator) Down() error {
 	rows, err := m.db.DB().Query(`
         SELECT version_name FROM schema_migrations
@@ -79,7 +243,7 @@ func (m *Migrator) Down() error {
 		return err
 	}
 
-	allMigs, err := m.src.ListMigrations()
+	allMigs, err := m.getAllMigrations()
 	if err != nil {
 		return fmt.Errorf("could not list migration files: %w", err)
 	}
@@ -103,11 +267,9 @@ func (m *Migrator) Down() error {
 	if err := m.db.SetMigrationState(migrationToRollback.DownFile, true, "down"); err != nil {
 		return err
 	}
-
 	if err := m.runMigration(migrationToRollback, "down"); err != nil {
 		return fmt.Errorf("failed to run down migration for %s: %w", migrationToRollback.DownFile, err)
 	}
-
 	if err := m.db.SetMigrationState(migrationToRollback.DownFile, false, "down"); err != nil {
 		return err
 	}
@@ -119,46 +281,6 @@ func (m *Migrator) Down() error {
 	return err
 }
 
-// Goto applies all migrations up to and including the target version.
-// FIXED: This function is now updated to work with the new metadata struct.
-func (m *Migrator) Goto(targetVersion int) error {
-	allMigs, err := m.src.ListMigrations()
-	if err != nil {
-		return err
-	}
-
-	targetDepGraph, err := m.buildDependencyGraph(allMigs, targetVersion)
-	if err != nil {
-		return err
-	}
-
-	sorted, err := TopoSort(targetDepGraph)
-	if err != nil {
-		return err
-	}
-
-	applied, err := m.db.GetApplied("up")
-	if err != nil {
-		return err
-	}
-
-	pending := make([]MigrationMetadata, 0)
-	for _, mig := range sorted {
-		if !applied[mig.UpFile] { // Simplified check
-			pending = append(pending, mig)
-		}
-	}
-
-	if len(pending) == 0 {
-		fmt.Printf("All migrations up to version %d are already applied.\n", targetVersion)
-		return nil
-	}
-
-	fmt.Printf("Applying %d migrations to reach version %d...\n", len(pending), targetVersion)
-	return m.applyMigrations(pending, "up")
-}
-
-// Status prints the state of all migrations recorded in the database.
 func (m *Migrator) Status() error {
 	rows, err := m.db.DB().Query(`SELECT version_name, direction, applied_at, dirty FROM schema_migrations ORDER BY applied_at ASC`)
 	if err != nil {
@@ -183,10 +305,31 @@ func (m *Migrator) Status() error {
 	return rows.Err()
 }
 
-// --- Helper Functions ---
+func (m *Migrator) getPendingMigrations() ([]MigrationMetadata, error) {
+	allMigs, err := m.getAllMigrations()
+	if err != nil {
+		return nil, err
+	}
 
-// applyMigrations is a generic helper to run a list of migrations.
-// FIXED: This function is now updated to call the new runMigration correctly.
+	sorted, err := TopoSort(allMigs)
+	if err != nil {
+		return nil, err
+	}
+
+	applied, err := m.getAppliedUpMigrations()
+	if err != nil {
+		return nil, err
+	}
+
+	pending := make([]MigrationMetadata, 0)
+	for _, mig := range sorted {
+		if !applied[mig.UpFile] {
+			pending = append(pending, mig)
+		}
+	}
+	return pending, nil
+}
+
 func (m *Migrator) applyMigrations(migrations []MigrationMetadata, direction string) error {
 	for _, mig := range migrations {
 		filename := mig.UpFile
@@ -198,11 +341,9 @@ func (m *Migrator) applyMigrations(migrations []MigrationMetadata, direction str
 		if err := m.db.SetMigrationState(filename, true, direction); err != nil {
 			return err
 		}
-
 		if err := m.runMigration(mig, direction); err != nil {
 			return fmt.Errorf("migration %s failed: %w", filename, err)
 		}
-
 		if err := m.db.SetMigrationState(filename, false, direction); err != nil {
 			return err
 		}
@@ -211,8 +352,6 @@ func (m *Migrator) applyMigrations(migrations []MigrationMetadata, direction str
 	return nil
 }
 
-// runMigration executes a single migration file (.sql or .go).
-// FIXED: The signature is updated and the SQL logic is filled in.
 func (m *Migrator) runMigration(mig MigrationMetadata, direction string) error {
 	var filename string
 	if direction == "up" {
@@ -239,7 +378,6 @@ func (m *Migrator) runMigration(mig MigrationMetadata, direction string) error {
 		if err != nil {
 			return err
 		}
-		//fmt.Printf("Executing SQL migration: %s\n", filename)
 		return m.db.Run(sqlStmt)
 
 	case ".go":
@@ -247,7 +385,6 @@ func (m *Migrator) runMigration(mig MigrationMetadata, direction string) error {
 		if !exists {
 			return fmt.Errorf("go migration %s is not registered", filename)
 		}
-		//fmt.Printf("Executing Go migration: %s\n", filename)
 		return goMig.Run(m.db.DB())
 
 	default:
@@ -255,68 +392,29 @@ func (m *Migrator) runMigration(mig MigrationMetadata, direction string) error {
 	}
 }
 
-// getPendingMigrations lists all migrations and filters out those already applied.
-// FIXED: This function now correctly checks for applied migrations using the UpFile field.
-func (m *Migrator) getPendingMigrations() ([]MigrationMetadata, error) {
-	allMigs, err := m.src.ListMigrations()
-	if err != nil {
-		return nil, err
-	}
-
-	sorted, err := TopoSort(allMigs)
-	if err != nil {
-		return nil, err
-	}
-
-	applied, err := m.db.GetApplied("up")
-	if err != nil {
-		return nil, err
-	}
-
-	pending := make([]MigrationMetadata, 0)
-	for _, mig := range sorted {
-		if !applied[mig.UpFile] {
-			pending = append(pending, mig)
-		}
-	}
-	return pending, nil
-}
-
-// Inside core/migrator.go
-
-// buildDependencyGraph creates a sub-graph containing only the target and its dependencies.
 func (m *Migrator) buildDependencyGraph(allMigs []MigrationMetadata, targetVersion int) ([]MigrationMetadata, error) {
-	// Step 1: Create a map for quick lookup of migrations by their version number.
 	migMap := make(map[int]MigrationMetadata)
 	for _, m := range allMigs {
 		migMap[m.Version] = m
 	}
-
-	// Ensure the target migration actually exists.
 	if _, exists := migMap[targetVersion]; !exists {
+		// Allow target 0 for rolling back all migrations
+		if targetVersion == 0 {
+			return []MigrationMetadata{}, nil
+		}
 		return nil, fmt.Errorf("target migration version %d not found", targetVersion)
 	}
-
-	// Step 2: Use a map to track all collected dependency versions to avoid duplicates.
 	depGraph := make(map[int]bool)
-
-	// Step 3: Define a recursive function (a closure) to perform a Depth-First Search (DFS).
 	var collectDeps func(int) error
 	collectDeps = func(v int) error {
-		// If we've already processed this migration, stop.
 		if depGraph[v] {
 			return nil
 		}
-
 		mig, ok := migMap[v]
 		if !ok {
 			return fmt.Errorf("dependency migration %d not found", v)
 		}
-
-		// Mark this migration as part of the dependency graph.
 		depGraph[v] = true
-
-		// Recursively call this function for all of the current migration's dependencies.
 		for _, dep := range mig.Dependencies {
 			if err := collectDeps(dep); err != nil {
 				return err
@@ -324,14 +422,9 @@ func (m *Migrator) buildDependencyGraph(allMigs []MigrationMetadata, targetVersi
 		}
 		return nil
 	}
-
-	// Step 4: Start the recursive search from the target version.
 	if err := collectDeps(targetVersion); err != nil {
 		return nil, err
 	}
-
-	// Step 5: Build the final list of migration metadata.
-	// Iterate through the original list and include only the ones we collected.
 	result := make([]MigrationMetadata, 0, len(depGraph))
 	for _, mig := range allMigs {
 		if depGraph[mig.Version] {
@@ -348,11 +441,9 @@ func TopoSort(migrations []MigrationMetadata) ([]MigrationMetadata, error) {
 		graph[m.Version] = m.Dependencies
 		migMap[m.Version] = m
 	}
-
 	var sorted []MigrationMetadata
 	visited := make(map[int]bool)
 	tempMarked := make(map[int]bool)
-
 	var visit func(int) error
 	visit = func(v int) error {
 		if tempMarked[v] {
@@ -363,7 +454,6 @@ func TopoSort(migrations []MigrationMetadata) ([]MigrationMetadata, error) {
 		}
 		tempMarked[v] = true
 		visited[v] = true
-
 		for _, dep := range graph[v] {
 			if _, ok := migMap[dep]; !ok {
 				return fmt.Errorf("migration %d has an unknown dependency: %d", v, dep)
@@ -376,13 +466,11 @@ func TopoSort(migrations []MigrationMetadata) ([]MigrationMetadata, error) {
 		sorted = append(sorted, migMap[v])
 		return nil
 	}
-
 	sortedKeys := make([]int, 0, len(migrations))
 	for _, m := range migrations {
 		sortedKeys = append(sortedKeys, m.Version)
 	}
 	sort.Ints(sortedKeys)
-
 	for _, v := range sortedKeys {
 		if !visited[v] {
 			if err := visit(v); err != nil {

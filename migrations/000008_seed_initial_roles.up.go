@@ -16,8 +16,6 @@ func init() {
 	gomigration.GoMigrationRegistry["000008_seed_initial_roles.up.go"] = &SeedInitialRolesUp{}
 }
 
-// The Role struct is no longer defined here.
-
 type SeedInitialRolesUp struct{}
 
 func (s *SeedInitialRolesUp) Run(db *sql.DB) error {
@@ -32,7 +30,6 @@ func (s *SeedInitialRolesUp) Run(db *sql.DB) error {
 		return err
 	}
 
-	// Use the imported models.Role struct
 	rolesToSeed := []models.Role{
 		{Name: "Admin"},
 		{Name: "Member"},
@@ -46,4 +43,10 @@ func (s *SeedInitialRolesUp) Run(db *sql.DB) error {
 	}
 
 	return nil
+}
+
+// Dependencies specifies that this migration depends on the 'create_roles_table' migration.
+func (s *SeedInitialRolesUp) Dependencies() []int {
+	// Depends on 000003_create_roles_table.up.sql
+	return []int{3}
 }

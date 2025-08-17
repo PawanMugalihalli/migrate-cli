@@ -6,14 +6,17 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"migrate/core"
+	"migrate/gomigration"
 )
 
-// FileSource reads migration files from a directory.
+// The struct and New function remain the same.
 type FileSource struct {
 	dir string
 }
@@ -25,25 +28,78 @@ func New(dir string) (*FileSource, error) {
 	return &FileSource{dir: dir}, nil
 }
 
-// Regex to match migration files like "000001_create_users.up.sql".
 var migrationFileRegex = regexp.MustCompile(`^(\d{6})_(.+)\.(up|down)\.(sql|go)$`)
 
-// file/source.go
+// parseResult remains the same.
+type parseResult struct {
+	metadata core.MigrationMetadata
+	err      error
+}
 
-// ListMigrations scans the directory for migration files and returns their metadata.
+// ListMigrations now only handles explicit dependencies for both SQL and Go.
 func (f *FileSource) ListMigrations() ([]core.MigrationMetadata, error) {
 	files, err := os.ReadDir(f.dir)
 	if err != nil {
 		return nil, fmt.Errorf("could not read migration directory: %w", err)
 	}
 
-	// Use a map to collect and combine data for each version number.
-	migrationsMap := make(map[int]core.MigrationMetadata)
-	for _, file := range files {
-		if file.IsDir() {
-			continue
-		}
+	// Concurrent parsing logic remains the same.
+	numWorkers := runtime.NumCPU()
+	jobs := make(chan os.DirEntry, len(files))
+	results := make(chan parseResult, len(files))
+	var wg sync.WaitGroup
 
+	for w := 0; w < numWorkers; w++ {
+		wg.Add(1)
+		go f.parserWorker(&wg, jobs, results)
+	}
+
+	for _, file := range files {
+		if !file.IsDir() {
+			jobs <- file
+		}
+	}
+	close(jobs)
+
+	wg.Wait()
+	close(results)
+
+	migrationsMap := make(map[int]core.MigrationMetadata)
+	for res := range results {
+		if res.err != nil {
+			return nil, res.err
+		}
+		m := res.metadata
+		metadata := migrationsMap[m.Version]
+		metadata.Version = m.Version
+		metadata.Name = m.Name
+
+		if m.UpFile != "" {
+			metadata.UpFile = m.UpFile
+			metadata.Dependencies = m.Dependencies
+		}
+		if m.DownFile != "" {
+			metadata.DownFile = m.DownFile
+		}
+		migrationsMap[m.Version] = metadata
+	}
+
+	// Convert map to slice for sorting.
+	migrations := make([]core.MigrationMetadata, 0, len(migrationsMap))
+	for _, m := range migrationsMap {
+		migrations = append(migrations, m)
+	}
+	sort.Slice(migrations, func(i, j int) bool {
+		return migrations[i].Version < migrations[j].Version
+	})
+
+	return migrations, nil
+}
+
+// parserWorker is updated to fetch dependencies for Go migrations.
+func (f *FileSource) parserWorker(wg *sync.WaitGroup, jobs <-chan os.DirEntry, results chan<- parseResult) {
+	defer wg.Done()
+	for file := range jobs {
 		name := file.Name()
 		matches := migrationFileRegex.FindStringSubmatch(name)
 		if matches == nil {
@@ -53,57 +109,60 @@ func (f *FileSource) ListMigrations() ([]core.MigrationMetadata, error) {
 		version, _ := strconv.Atoi(matches[1])
 		migName := matches[2]
 		direction := matches[3]
+		fileType := matches[4]
 
-		// Find or create the metadata entry for this version
-		metadata := migrationsMap[version]
-		metadata.Version = version
-		metadata.Name = migName
+		metadata := core.MigrationMetadata{
+			Version: version,
+			Name:    migName,
+		}
 
-		// Set the correct file field based on the direction
+		var deps []int
+		var err error
+
 		if direction == "up" {
 			metadata.UpFile = name
-			// Only parse dependencies from 'up' files to avoid redundant parsing.
-			deps, err := parseDependencies(filepath.Join(f.dir, name))
-			if err != nil {
-				return nil, fmt.Errorf("failed to parse dependencies for %s: %w", name, err)
+			if fileType == "sql" {
+				// SQL files: parse dependencies from comments.
+				deps, err = parseDependencies(filepath.Join(f.dir, name))
+				if err != nil {
+					results <- parseResult{err: fmt.Errorf("failed to parse dependencies for %s: %w", name, err)}
+					return
+				}
+			} else if fileType == "go" {
+				// Go files: get dependencies from the registered migration.
+				goMig, exists := gomigration.GoMigrationRegistry[name]
+				if !exists {
+					// NOTE: This assumes Go migrations are registered before this function runs.
+					// An empty slice will be used if not found, which is safe.
+					deps = []int{}
+				} else {
+					deps = goMig.Dependencies()
+				}
 			}
 			metadata.Dependencies = deps
 		} else if direction == "down" {
 			metadata.DownFile = name
 		}
 
-		// Put the updated struct back in the map.
-		migrationsMap[version] = metadata
+		results <- parseResult{metadata: metadata}
 	}
-
-	// Convert map to slice for sorting.
-	migrations := make([]core.MigrationMetadata, 0, len(migrationsMap))
-	for _, m := range migrationsMap {
-		migrations = append(migrations, m)
-	}
-
-	// Sort by version for predictable order.
-	sort.Slice(migrations, func(i, j int) bool {
-		return migrations[i].Version < migrations[j].Version
-	})
-
-	return migrations, nil
 }
 
-// ReadUp finds and reads the content of an 'up' migration file.
+// ReadUp, ReadDown, and readFirstMatch remain the same.
 func (f *FileSource) ReadUp(version int) (string, error) {
+	// ... (no changes)
 	pattern := fmt.Sprintf("%s/%06d_*.up.sql", f.dir, version)
 	return readFirstMatch(pattern)
 }
 
-// ReadDown finds and reads the content of a 'down' migration file.
 func (f *FileSource) ReadDown(version int) (string, error) {
+	// ... (no changes)
 	pattern := fmt.Sprintf("%s/%06d_*.down.sql", f.dir, version)
 	return readFirstMatch(pattern)
 }
 
-// Helper to read the first file matching a glob pattern.
 func readFirstMatch(pattern string) (string, error) {
+	// ... (no changes)
 	matches, err := filepath.Glob(pattern)
 	if err != nil {
 		return "", err
@@ -118,8 +177,7 @@ func readFirstMatch(pattern string) (string, error) {
 	return string(data), nil
 }
 
-// parseDependencies scans the top of a file for dependency comments.
-// Example: -- depends_on: 000001_create_users, 000002
+// parseDependencies now returns an empty slice if no explicit dependency line is found.
 func parseDependencies(path string) ([]int, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -135,12 +193,9 @@ func parseDependencies(path string) ([]int, error) {
 	for scanner.Scan() {
 		line := scanner.Text()
 		trimmedLine := strings.TrimSpace(line)
-
-		// Stop scanning if we hit a non-comment or an empty line.
 		if !strings.HasPrefix(trimmedLine, "--") || trimmedLine == "--" {
 			break
 		}
-
 		matches := depRegex.FindStringSubmatch(trimmedLine)
 		if len(matches) < 2 {
 			continue
@@ -154,9 +209,10 @@ func parseDependencies(path string) ([]int, error) {
 				deps = append(deps, v)
 			}
 		}
-		// Once we've found and parsed a depends_on line, we can stop.
-		break
+		// Once we find the line, we can stop scanning.
+		return deps, scanner.Err()
 	}
 
-	return deps, scanner.Err()
+	// If the loop finishes without finding a 'depends_on' line, return an empty slice.
+	return []int{}, scanner.Err()
 }
