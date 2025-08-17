@@ -1,4 +1,4 @@
-module migrate
+module github.com/PawanMugalihalli/migrate-cli
 
 go 1.23.0
 

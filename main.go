@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"migrate/core"
-	postgres "migrate/drivers/database"
-	file "migrate/drivers/source"
-	_ "migrate/migrations"
+	"github.com/PawanMugalihalli/migrate-cli/core"
+	postgres "github.com/PawanMugalihalli/migrate-cli/drivers/database"
+	file "github.com/PawanMugalihalli/migrate-cli/drivers/source"
+	_ "github.com/PawanMugalihalli/migrate-cli/migrations"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/push"

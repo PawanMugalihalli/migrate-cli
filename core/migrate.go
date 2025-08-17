@@ -3,11 +3,12 @@ package core
 import (
 	"database/sql"
 	"fmt"
-	"migrate/gomigration"
 	"path/filepath"
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/PawanMugalihalli/migrate-cli/gomigration"
 )
 
 // Interfaces remain the same.

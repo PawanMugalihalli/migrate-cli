@@ -3,7 +3,8 @@ package migrations
 import (
 	"database/sql"
 	"log"
-	"migrate/gomigration" // <-- Make sure this matches your go.mod module name
+
+	"github.com/PawanMugalihalli/migrate-cli/gomigration" // <-- Make sure this matches your go.mod module name
 )
 
 func init() {

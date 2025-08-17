@@ -4,8 +4,10 @@ package migrations
 import (
 	"database/sql"
 	"log"
-	"migrate/gomigration"
-	"migrate/models"
+
+	"github.com/PawanMugalihalli/migrate-cli/gomigration"
+
+	"github.com/PawanMugalihalli/migrate-cli/models"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"

@@ -12,8 +12,8 @@ import (
 	"strings"
 	"sync"
 
-	"migrate/core"
-	"migrate/gomigration"
+	"github.com/PawanMugalihalli/migrate-cli/core"
+	"github.com/PawanMugalihalli/migrate-cli/gomigration"
 )
 
 // The struct and New function remain the same.
