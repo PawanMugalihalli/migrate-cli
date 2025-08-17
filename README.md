@@ -21,3 +21,27 @@ Ensure you have the Go toolchain installed (version 1.23 or newer is recommended
 Run the following command in your terminal to install the tool:
 ```sh
 go install [github.com/PawanMugalihalli/migrate-cli@latest](https://github.com/PawanMugalihalli/migrate-cli@latest)
+
+---
+Usage and Use Cases
+This guide explains when and why to use each command. All commands require a database connection string passed via the -db flag.
+
+create
+Use Case: Starting a new schema change. Run this to generate the necessary .up and .down migration files.
+migrate-cli -action=create -name=<migration_name>
+
+up
+Use Case: Applying new changes. This is the most common command to bring your database to the latest version.
+migrate-cli -action=up -db="<your-database-connection-string>"
+
+down
+Use Case: A quick "undo" during development. Use this to revert the last migration you applied.
+migrate-cli -action=down -db="<your-database-connection-string>"
+
+goto
+Use Case: The power tool for precise version control. Use goto for complex rollbacks or for setting a database to a specific older state for testing.
+migrate-cli -action=goto -version=<version_number> -db="<your-database-connection-string>"
+
+status
+Use Case: Inspecting and debugging the database state. Run status to see a clear list of all applied migrations and check for failures
+migrate-cli -action=status -db="<your-database-connection-string>"
