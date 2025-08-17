@@ -239,7 +239,7 @@ func (m *Migrator) runMigration(mig MigrationMetadata, direction string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Printf("Executing SQL migration: %s\n", filename)
+		//fmt.Printf("Executing SQL migration: %s\n", filename)
 		return m.db.Run(sqlStmt)
 
 	case ".go":
@@ -247,7 +247,7 @@ func (m *Migrator) runMigration(mig MigrationMetadata, direction string) error {
 		if !exists {
 			return fmt.Errorf("go migration %s is not registered", filename)
 		}
-		fmt.Printf("Executing Go migration: %s\n", filename)
+		//fmt.Printf("Executing Go migration: %s\n", filename)
 		return goMig.Run(m.db.DB())
 
 	default:

@@ -1,16 +1,16 @@
 services:
+
   postgres:
     image: postgres:15
     container_name: postgres-db1
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: "1234"
-      POSTGRES_DB: testdb3 # The database that will be created
+      POSTGRES_DB: testdb3
     ports:
       - "5430:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    # This healthcheck tells Docker to check if the database is ready
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d testdb3"]
       interval: 5s
@@ -19,28 +19,54 @@ services:
 
   migrate:
     build: .
-    container_name: migrate-cli1
+    container_name: migrate-cli
     depends_on:
       postgres:
-        # This condition waits for the postgres service to pass its healthcheck
-        condition: service_healthy 
+        condition: service_healthy
+      # Ensure pushgateway is available before running the migration
+      pushgateway:
+        condition: service_started
     volumes:
       - ./migrations:/app/migrations
-    command:
-      [
-        "-action", "status",
-        "-path", "migrations",
-        # CORRECTED: The command now points to the correct database (testdb3)
-        "-db", "postgres://postgres:1234@postgres:5432/testdb3?sslmode=disable"
-      ]
+
   migrate-test:
     build:
       context: .
-      # It specifically targets the 'builder' stage from the Dockerfile.
-      target: builder 
+      target: builder
     command: ["go", "test", "-v", "./..."]
     depends_on:
-      - postgres   
+      - postgres
+
+  # --- Monitoring Stack ---
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus1
+    ports:
+      - "9090:9090"
+    volumes:
+      # Mount the configuration file
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+    depends_on:
+      - pushgateway
+
+  pushgateway:
+    image: prom/pushgateway:latest
+    container_name: pushgateway
+    ports:
+      - "9091:9091"
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana1
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    depends_on:
+      - prometheus
 
 volumes:
   postgres_data:

@@ -53,7 +53,7 @@ func (md *MockDatabase) Version() (int, bool, error) { return 0, false, nil }
 func (md *MockDatabase) DB() *sql.DB                 { return nil }
 
 //-------------------------------------------------
-// 2. YOUR TEST CASE
+// 2. TEST CASE
 // This is the test function you provided.
 //-------------------------------------------------
 

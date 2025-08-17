@@ -1,0 +1,8 @@
+global:
+  scrape_interval: 5s # How often to fetch metrics
+
+scrape_configs:
+  - job_name: 'pushgateway'
+    # Tell Prometheus to scrape the Pushgateway service on its default port
+    static_configs:
+      - targets: ['pushgateway:9091']
