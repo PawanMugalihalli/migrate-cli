@@ -59,3 +59,10 @@ status
 Use Case: Inspecting and debugging the database state. Run status to see a clear list of all applied migrations and check for failures
 
 migrate-cli -action=status -db=""
+
+
+graph TD;
+    A[Node 1] --> B[Node 2];
+    A --> C[Node 3];
+    B --> D[End Node];
+    C --> D;
