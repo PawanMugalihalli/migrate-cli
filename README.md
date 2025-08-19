@@ -51,7 +51,7 @@ Use Case: Inspecting the database state. Run status to see a clear list of all a
 
 Use Case: Starting a new schema change. Run this to generate the necessary .up and .down migration files.
 
--> docker compose run migrate -action=create -name=
+-> docker compose run migrate -action=create -name= -db=
 
 **validate**
 
