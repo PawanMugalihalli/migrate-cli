@@ -1,33 +1,3 @@
-# Messaging System Backend
-
-A secure, real-time messaging backend built with Go (Gin). Supports user auth, DMs, group chats, message editing with handling of concurrency issues, and chat summarization using LLMs.
-
----
-
-## Features
-
-- JWT-based authentication
-- Direct messages (DMs)
-- Group chat with admin/member roles
-- Chat summarization using LLMs
-- Edit messages (DM and group)
-- View chat previews and history
-- Dockerized for easy setup
-
----
-
-## Getting Started
-
-### 1. Clone the repository
-
-git clone https://github.com/PawanMugalihalli/MessagingSystemBackend.git  
-cd MessagingSystemBackend
-
-
-
-
-
-
 # Migrate CLI
 
 A powerful, dependency-aware command-line tool for managing database schema migrations in Go, built to handle complex dependency graphs and provide a safe, predictable workflow.
