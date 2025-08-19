@@ -8,9 +8,9 @@ A powerful, dependency-aware command-line tool for managing database schema migr
 
 - **Dependency Management**: Uses a topological sort to ensure migrations are always applied in the correct order, even with complex, non-sequential dependencies.
 
-- **Safe Rollbacks**: A fully dependency-aware `goto` command correctly calculates the rollback order by reversing the application order, preventing an inconsistent database state.
+- **Safe Rollbacks**: A fully dependency-aware `goto` command correctly calculates the rollback order by reversing the application order.
 
-- **SQL & Go Migrations**: Supports both standard `.sql` files and programmatic migrations written in `.go`, allowing for complex data seeding or logic.
+- **SQL & Go Migrations**: Supports both standard `.sql` files and programmatic migrations written in `.go`.
 
 - **High Performance**: Features concurrent file parsing for fast startup and intelligent in-memory caching to minimize redundant work within a single command.
 
